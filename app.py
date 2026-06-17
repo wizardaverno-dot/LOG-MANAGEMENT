@@ -1,5 +1,5 @@
 """
-app.py  –  Sistema de Análisis de Pozos
+app.py  –  Sistema de Análisis de Pozos (Multi-archivo)
 Streamlit web app that wraps the petrophysical ML pipeline.
 """
 
@@ -39,14 +39,13 @@ st.markdown(
         --bg-dark:    #0d1117;
         --bg-card:    #161b22;
         --border:     #30363d;
-        --accent:     #f0a500;          /* amber – like core-sample minerals */
-        --accent2:    #2ea043;          /* green – reservoir pay */
+        --accent:     #f0a500;
+        --accent2:    #2ea043;
         --text-main:  #e6edf3;
         --text-muted: #8b949e;
         --danger:     #da3633;
     }
 
-    /* dark canvas */
     html, body, [data-testid="stAppViewContainer"],
     [data-testid="stApp"] {
         background-color: var(--bg-dark) !important;
@@ -57,7 +56,6 @@ st.markdown(
         border-right: 1px solid var(--border);
     }
 
-    /* metric cards */
     [data-testid="stMetric"] {
         background: var(--bg-card);
         border: 1px solid var(--border);
@@ -68,7 +66,6 @@ st.markdown(
     [data-testid="stMetricValue"] { color: var(--accent) !important; font-size: 1.6rem !important; font-weight: 700; }
     [data-testid="stMetricDelta"] { color: var(--accent2) !important; }
 
-    /* section headers */
     .section-header {
         font-family: 'Courier New', monospace;
         font-size: 0.75rem;
@@ -80,7 +77,6 @@ st.markdown(
         margin-bottom: 1rem;
     }
 
-    /* zone badge */
     .zone-badge {
         display: inline-block;
         padding: 2px 8px;
@@ -91,7 +87,6 @@ st.markdown(
         color: #000;
     }
 
-    /* primary button override */
     div[data-testid="stButton"] > button[kind="primary"] {
         background-color: var(--accent) !important;
         color: #000 !important;
@@ -103,10 +98,8 @@ st.markdown(
         background-color: #d49200 !important;
     }
 
-    /* dataframe */
     [data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 6px; }
 
-    /* hide Streamlit branding */
     #MainMenu, footer { visibility: hidden; }
     </style>
     """,
@@ -198,7 +191,7 @@ def build_features(df: pd.DataFrame):
     features = [c for c in ["RHOB", "GR", "NPHI", "RT", "PHI", "VSH"] if c in df.columns]
     if not features:
         raise ValueError("No hay features disponibles para el modelo.")
-    df_model = df[["Depth"] + features].dropna(subset=features).reset_index(drop=True)
+    df_model = df[["Depth", "Well"] + features].dropna(subset=features).reset_index(drop=True)
     return df_model, features
 
 
@@ -220,7 +213,7 @@ def train_model(df_model: pd.DataFrame, features: list):
 
 
 def integrate_results(df: pd.DataFrame, df_model: pd.DataFrame) -> pd.DataFrame:
-    df = df.merge(df_model[["Depth", "Prediction"]], on="Depth", how="left")
+    df = df.merge(df_model[["Depth", "Well", "Prediction"]], on=["Depth", "Well"], how="left")
     if df["Prediction"].notna().sum() >= 3:
         try:
             df["Reservoir_Quality"] = pd.qcut(
@@ -306,7 +299,10 @@ CURVE_CONFIG = {
 }
 
 
-def make_log_plot(df: pd.DataFrame) -> go.Figure:
+def make_log_plot(df: pd.DataFrame, well_filter: str = None) -> go.Figure:
+    if well_filter:
+        df = df[df["Well"] == well_filter]
+    
     available = [c for c in CURVE_CONFIG if c in df.columns]
     if not available:
         return None
@@ -369,8 +365,10 @@ def make_log_plot(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def make_zone_plot(df: pd.DataFrame) -> go.Figure:
-    """Depth track coloured by Lithofacies."""
+def make_zone_plot(df: pd.DataFrame, well_filter: str = None) -> go.Figure:
+    if well_filter:
+        df = df[df["Well"] == well_filter]
+    
     if "Lithofacies" not in df.columns or "Depth" not in df.columns:
         return None
 
@@ -441,10 +439,11 @@ st.markdown(
 with st.sidebar:
     st.markdown('<p class="section-header">📂 Cargar Datos</p>', unsafe_allow_html=True)
 
-    uploaded = st.file_uploader(
-        "Selecciona un archivo",
+    uploaded_files = st.file_uploader(
+        "Selecciona uno o más archivos",
         type=["las", "LAS", "csv"],
-        help="Formatos admitidos: .las / .LAS / .csv",
+        accept_multiple_files=True,
+        help="Formatos admitidos: .las / .LAS / .csv. Puedes cargar múltiples archivos.",
     )
 
     st.markdown("---")
@@ -466,13 +465,13 @@ with st.sidebar:
     )
 
 # ── Main area ────────────────────────────────────────────────────────────────
-if uploaded is None:
+if not uploaded_files:
     st.markdown(
         """
         <div style="text-align:center;padding:4rem 0;color:#30363d;">
             <div style="font-size:4rem;margin-bottom:1rem;">🪨</div>
             <p style="font-size:1.1rem;color:#8b949e;">
-                Carga un archivo <b style="color:#f0a500;">.las</b> o
+                Carga uno o más archivos <b style="color:#f0a500;">.las</b> o
                 <b style="color:#f0a500;">.csv</b> en la barra lateral para comenzar.
             </p>
         </div>
@@ -481,36 +480,56 @@ if uploaded is None:
     )
     st.stop()
 
-# ── Load file ────────────────────────────────────────────────────────────────
-df_raw = None
-file_ext = uploaded.name.rsplit(".", 1)[-1].lower()
+# ── Load files ────────────────────────────────────────────────────────────────
+all_dfs = []
+errors = []
 
-with st.spinner("Leyendo archivo…"):
-    try:
-        if file_ext == "las":
-            df_raw = load_las(uploaded)
-        else:
-            df_raw = load_csv(uploaded)
-            df_raw = normalize_depth(df_raw)
-    except Exception as exc:
-        st.error(f"❌ No se pudo leer el archivo: {exc}")
-        st.code(traceback.format_exc(), language="python")
-        st.stop()
+with st.spinner(f"Leyendo {len(uploaded_files)} archivo(s)…"):
+    for uploaded in uploaded_files:
+        file_ext = uploaded.name.rsplit(".", 1)[-1].lower()
+        well_name = uploaded.name.rsplit(".", 1)[0]
+        
+        try:
+            if file_ext == "las":
+                df_temp = load_las(uploaded)
+            else:
+                df_temp = load_csv(uploaded)
+                df_temp = normalize_depth(df_temp)
+            
+            df_temp["Well"] = well_name
+            all_dfs.append(df_temp)
+        except Exception as exc:
+            errors.append(f"❌ {uploaded.name}: {exc}")
 
-st.success(f"✅ **{uploaded.name}** cargado — {len(df_raw):,} registros, {df_raw.shape[1]} columnas")
+if errors:
+    for err in errors:
+        st.error(err)
+
+if not all_dfs:
+    st.error("No se pudo cargar ningún archivo. Revisa los errores arriba.")
+    st.stop()
+
+# Combine all DataFrames
+df_raw = pd.concat(all_dfs, ignore_index=True)
+
+st.success(f"✅ **{len(uploaded_files)} archivo(s)** cargado(s) — {len(df_raw):,} registros totales, {df_raw.shape[1]} columnas")
+
+# ── Well selector ─────────────────────────────────────────────────────────────
+wells = df_raw["Well"].unique().tolist()
+selected_well = st.selectbox("🔍 Seleccionar pozo para visualización", wells)
 
 # ── Preview ──────────────────────────────────────────────────────────────────
 with st.expander("🔎 Vista previa de los datos crudos", expanded=False):
-    st.dataframe(df_raw.head(5), use_container_width=True)
-    depth_col = df_raw["Depth"]
+    st.dataframe(df_raw[df_raw["Well"] == selected_well].head(5), use_container_width=True)
+    depth_col = df_raw[df_raw["Well"] == selected_well]["Depth"]
     c1, c2, c3 = st.columns(3)
     c1.metric("Profundidad mín.", f"{depth_col.min():.1f} m")
     c2.metric("Profundidad máx.", f"{depth_col.max():.1f} m")
-    c3.metric("Columnas disponibles", str(df_raw.shape[1]))
+    c3.metric("Pozos cargados", str(len(wells)))
 
 # ── Log plot ─────────────────────────────────────────────────────────────────
 st.markdown('<p class="section-header">📈 Registro de Curvas</p>', unsafe_allow_html=True)
-fig_log = make_log_plot(df_raw)
+fig_log = make_log_plot(df_raw, well_filter=selected_well)
 if fig_log:
     st.plotly_chart(fig_log, use_container_width=True)
 else:
@@ -556,6 +575,7 @@ if run_btn:
         st.session_state["df_result"] = df
         st.session_state["agreement_rate"] = agreement_rate
         st.session_state["features"] = features
+        st.session_state["model"] = model
 
     except Exception as exc:
         progress.empty()
@@ -578,11 +598,7 @@ if "df_result" in st.session_state:
     c1.metric("Registros procesados", f"{len(df):,}")
     c2.metric("Concordancia ML / Petro", f"{agreement_rate:.1f}%",
               delta="objetivo ≥ 70%" if agreement_rate >= 70 else None)
-
-    # Zone distribution
-    if "Zone" in df.columns:
-        top_zone = df["Zone"].value_counts().idxmax()
-        c3.metric("Zona dominante", top_zone)
+    c3.metric("Pozos procesados", str(len(wells)))
 
     if "Lithofacies" in df.columns:
         top_litho = df["Lithofacies"].value_counts().idxmax()
@@ -618,7 +634,7 @@ if "df_result" in st.session_state:
                 )
             )
             fig_bar.update_layout(
-                title="Distribución de Litofacies",
+                title="Distribución de Litofacies (Todos los pozos)",
                 paper_bgcolor="#0d1117",
                 plot_bgcolor="#0d1117",
                 font=dict(color="#e6edf3"),
@@ -644,7 +660,7 @@ if "df_result" in st.session_state:
                 )
             )
             fig_pie.update_layout(
-                title="Calidad Petrofísica",
+                title="Calidad Petrofísica (Todos los pozos)",
                 paper_bgcolor="#0d1117",
                 font=dict(color="#e6edf3"),
                 margin=dict(l=20, r=20, t=40, b=20),
@@ -655,25 +671,20 @@ if "df_result" in st.session_state:
 
     # ── Zone + log combo ─────────────────────────────────────────────────────
     st.markdown('<p class="section-header">🗂️ Perfil de Litofacies</p>', unsafe_allow_html=True)
-    fig_zone = make_zone_plot(df)
+    fig_zone = make_zone_plot(df, well_filter=selected_well)
     if fig_zone:
         col_zone, col_log = st.columns([1, 5])
         with col_zone:
             st.plotly_chart(fig_zone, use_container_width=True)
         with col_log:
-            fig_log2 = make_log_plot(df)
+            fig_log2 = make_log_plot(df, well_filter=selected_well)
             if fig_log2:
                 st.plotly_chart(fig_log2, use_container_width=True)
-
-    # ── Feature importances ──────────────────────────────────────────────────
-    if "model" not in st.session_state:
-        # re-train to grab model object (it was already done; store next time)
-        pass  # model is only used for importance; skip if not cached
 
     # ── Result table ──────────────────────────────────────────────────────────
     st.markdown('<p class="section-header">📋 Tabla de Resultados</p>', unsafe_allow_html=True)
 
-    display_cols = ["Depth"] + features + [
+    display_cols = ["Well", "Depth"] + features + [
         c for c in ["Zone", "Lithofacies", "Petro_Class", "Reservoir_Quality", "Agreement"]
         if c in df.columns
     ]
@@ -682,9 +693,9 @@ if "df_result" in st.session_state:
     # ── Download ──────────────────────────────────────────────────────────────
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="⬇️ Descargar CSV de resultados",
+        label="⬇️ Descargar CSV de resultados (todos los pozos)",
         data=csv_bytes,
-        file_name=f"resultado_{uploaded.name.rsplit('.', 1)[0]}.csv",
+        file_name="resultados_multiples_pozos.csv",
         mime="text/csv",
         use_container_width=True,
     )
