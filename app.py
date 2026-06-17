@@ -19,7 +19,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 
 # ==========================================
-# 2. PAGE CONFIG  (must be first Streamlit call)
+# 2. PAGE CONFIG
 # ==========================================
 st.set_page_config(
     page_title="Análisis de Pozos",
@@ -34,7 +34,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* ---------- palette ---------- */
     :root {
         --bg-dark:    #0d1117;
         --bg-card:    #161b22;
@@ -75,16 +74,6 @@ st.markdown(
         border-bottom: 1px solid var(--border);
         padding-bottom: 0.4rem;
         margin-bottom: 1rem;
-    }
-
-    .zone-badge {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        background: var(--accent);
-        color: #000;
     }
 
     div[data-testid="stButton"] > button[kind="primary"] {
@@ -209,38 +198,28 @@ def train_model(df_model: pd.DataFrame, features: list):
     model = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
     model.fit(X_scaled, y)
     
-    # Asegurar que Prediction se agregue correctamente
-    predictions = model.predict(X_scaled)
-    df_model = df_model.copy()  # Copia explícita antes de modificar
-    df_model["Prediction"] = predictions
-    
-    # Verificar que la columna existe
-    if "Prediction" not in df_model.columns:
-        raise ValueError("Error: La columna 'Prediction' no se creó en df_model")
+    df_model = df_model.copy()
+    df_model["Prediction"] = model.predict(X_scaled)
     
     return df_model, model
 
 
 def integrate_results(df: pd.DataFrame, df_model: pd.DataFrame) -> pd.DataFrame:
-    # Verificar que df_model tenga las columnas necesarias
     required_cols = ["Depth", "Well", "Prediction"]
     missing_cols = [col for col in required_cols if col not in df_model.columns]
     
     if missing_cols:
         raise ValueError(f"df_model no tiene las columnas: {missing_cols}. Columnas disponibles: {list(df_model.columns)}")
     
-    # Hacer el merge
     df_merged = df.merge(
         df_model[["Depth", "Well", "Prediction"]], 
         on=["Depth", "Well"], 
         how="left"
     )
     
-    # Verificar que la columna Prediction existe después del merge
     if "Prediction" not in df_merged.columns:
         raise ValueError("Error: La columna 'Prediction' no existe después del merge")
     
-    # Continuar con la lógica original
     if df_merged["Prediction"].notna().sum() >= 3:
         try:
             df_merged["Reservoir_Quality"] = pd.qcut(
@@ -443,7 +422,6 @@ def make_zone_plot(df: pd.DataFrame, well_filter: str = None) -> go.Figure:
 # 7. STREAMLIT UI
 # ==========================================
 
-# ── Header ──────────────────────────────────────────────────────────────────
 st.markdown(
     """
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:0.5rem;">
@@ -537,7 +515,6 @@ if not all_dfs:
     st.error("No se pudo cargar ningún archivo. Revisa los errores arriba.")
     st.stop()
 
-# Combine all DataFrames
 df_raw = pd.concat(all_dfs, ignore_index=True)
 
 st.success(f"✅ **{len(uploaded_files)} archivo(s)** cargado(s) — {len(df_raw):,} registros totales, {df_raw.shape[1]} columnas")
@@ -548,7 +525,7 @@ selected_well = st.selectbox("🔍 Seleccionar pozo para visualización", wells)
 
 # ── Preview ──────────────────────────────────────────────────────────────────
 with st.expander("🔎 Vista previa de los datos crudos", expanded=False):
-    st.dataframe(df_raw[df_raw["Well"] == selected_well].head(5), use_container_width=True)
+    st.dataframe(df_raw[df_raw["Well"] == selected_well].head(5), width="stretch")
     depth_col = df_raw[df_raw["Well"] == selected_well]["Depth"]
     c1, c2, c3 = st.columns(3)
     c1.metric("Profundidad mín.", f"{depth_col.min():.1f} m")
@@ -559,7 +536,7 @@ with st.expander("🔎 Vista previa de los datos crudos", expanded=False):
 st.markdown('<p class="section-header">📈 Registro de Curvas</p>', unsafe_allow_html=True)
 fig_log = make_log_plot(df_raw, well_filter=selected_well)
 if fig_log:
-    st.plotly_chart(fig_log, use_container_width=True)
+    st.plotly_chart(fig_log, width="stretch")
 else:
     st.warning(
         "⚠️ No se encontraron curvas estándar (GR, RHOB, NPHI, RT) en el archivo. "
@@ -611,7 +588,7 @@ if run_btn:
         st.error(f"❌ Error durante el procesamiento: {exc}")
         st.code(traceback.format_exc(), language="python")
 
-# ── Results (shown if processing was done) ─────────────────────────────────
+# ── Results ─────────────────────────────────────────────────────────────────
 if "df_result" in st.session_state:
     df = st.session_state["df_result"]
     agreement_rate = st.session_state["agreement_rate"]
@@ -620,7 +597,6 @@ if "df_result" in st.session_state:
     st.markdown("---")
     st.markdown('<p class="section-header">📊 Resultados</p>', unsafe_allow_html=True)
 
-    # ── Key metrics ──────────────────────────────────────────────────────────
     c1, c2, c3, c4, c5 = st.columns(5)
 
     c1.metric("Registros procesados", f"{len(df):,}")
@@ -636,7 +612,6 @@ if "df_result" in st.session_state:
         good_pct = (df["Petro_Class"] == "Good").mean() * 100
         c5.metric("Calidad Good", f"{good_pct:.1f}%")
 
-    # ── Distribution charts ───────────────────────────────────────────────────
     col_l, col_r = st.columns(2)
 
     with col_l:
@@ -671,7 +646,7 @@ if "df_result" in st.session_state:
                 margin=dict(l=20, r=20, t=40, b=40),
                 height=320,
             )
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, width="stretch")
 
     with col_r:
         if "Petro_Class" in df.columns:
@@ -695,40 +670,36 @@ if "df_result" in st.session_state:
                 height=320,
                 showlegend=False,
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width="stretch")
 
-    # ── Zone + log combo ─────────────────────────────────────────────────────
     st.markdown('<p class="section-header">🗂️ Perfil de Litofacies</p>', unsafe_allow_html=True)
     fig_zone = make_zone_plot(df, well_filter=selected_well)
     if fig_zone:
         col_zone, col_log = st.columns([1, 5])
         with col_zone:
-            st.plotly_chart(fig_zone, use_container_width=True)
+            st.plotly_chart(fig_zone, width="stretch")
         with col_log:
             fig_log2 = make_log_plot(df, well_filter=selected_well)
             if fig_log2:
-                st.plotly_chart(fig_log2, use_container_width=True)
+                st.plotly_chart(fig_log2, width="stretch")
 
-    # ── Result table ──────────────────────────────────────────────────────────
     st.markdown('<p class="section-header">📋 Tabla de Resultados</p>', unsafe_allow_html=True)
 
     display_cols = ["Well", "Depth"] + features + [
         c for c in ["Zone", "Lithofacies", "Petro_Class", "Reservoir_Quality", "Agreement"]
         if c in df.columns
     ]
-    st.dataframe(df[display_cols], use_container_width=True, height=320)
+    st.dataframe(df[display_cols], width="stretch", height=320)
 
-    # ── Download ──────────────────────────────────────────────────────────────
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="⬇️ Descargar CSV de resultados (todos los pozos)",
         data=csv_bytes,
         file_name="resultados_multiples_pozos.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 
-    # ── Concordance detail ────────────────────────────────────────────────────
     if "Agreement" in df.columns:
         with st.expander("🔍 Detalle de concordancia ML vs Petrofísica"):
             agree_counts = df["Agreement"].value_counts().reset_index()
@@ -751,4 +722,4 @@ if "df_result" in st.session_state:
                 margin=dict(l=20, r=20, t=20, b=20),
                 height=260,
             )
-            st.plotly_chart(fig_agree, use_container_width=True)
+            st.plotly_chart(fig_agree, width="stretch")
