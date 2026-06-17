@@ -208,22 +208,50 @@ def train_model(df_model: pd.DataFrame, features: list):
     X_scaled = scaler.fit_transform(X)
     model = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
     model.fit(X_scaled, y)
-    df_model["Prediction"] = model.predict(X_scaled)
+    
+    # Asegurar que Prediction se agregue correctamente
+    predictions = model.predict(X_scaled)
+    df_model = df_model.copy()  # Copia explícita antes de modificar
+    df_model["Prediction"] = predictions
+    
+    # Verificar que la columna existe
+    if "Prediction" not in df_model.columns:
+        raise ValueError("Error: La columna 'Prediction' no se creó en df_model")
+    
     return df_model, model
 
 
 def integrate_results(df: pd.DataFrame, df_model: pd.DataFrame) -> pd.DataFrame:
-    df = df.merge(df_model[["Depth", "Well", "Prediction"]], on=["Depth", "Well"], how="left")
-    if df["Prediction"].notna().sum() >= 3:
+    # Verificar que df_model tenga las columnas necesarias
+    required_cols = ["Depth", "Well", "Prediction"]
+    missing_cols = [col for col in required_cols if col not in df_model.columns]
+    
+    if missing_cols:
+        raise ValueError(f"df_model no tiene las columnas: {missing_cols}. Columnas disponibles: {list(df_model.columns)}")
+    
+    # Hacer el merge
+    df_merged = df.merge(
+        df_model[["Depth", "Well", "Prediction"]], 
+        on=["Depth", "Well"], 
+        how="left"
+    )
+    
+    # Verificar que la columna Prediction existe después del merge
+    if "Prediction" not in df_merged.columns:
+        raise ValueError("Error: La columna 'Prediction' no existe después del merge")
+    
+    # Continuar con la lógica original
+    if df_merged["Prediction"].notna().sum() >= 3:
         try:
-            df["Reservoir_Quality"] = pd.qcut(
-                df["Prediction"], 3, labels=["Low", "Medium", "High"], duplicates="drop"
+            df_merged["Reservoir_Quality"] = pd.qcut(
+                df_merged["Prediction"], 3, labels=["Low", "Medium", "High"], duplicates="drop"
             )
         except Exception:
-            df["Reservoir_Quality"] = "Medium"
+            df_merged["Reservoir_Quality"] = "Medium"
     else:
-        df["Reservoir_Quality"] = "Low"
-    return df
+        df_merged["Reservoir_Quality"] = "Low"
+    
+    return df_merged
 
 
 def compare_results(df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
