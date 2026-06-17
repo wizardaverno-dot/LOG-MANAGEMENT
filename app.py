@@ -180,7 +180,12 @@ def build_features(df: pd.DataFrame):
     features = [c for c in ["RHOB", "GR", "NPHI", "RT", "PHI", "VSH"] if c in df.columns]
     if not features:
         raise ValueError("No hay features disponibles para el modelo.")
-    df_model = df[["Depth", "Well"] + features].dropna(subset=features).reset_index(drop=True)
+    
+    # Guardar el índice original para poder mapear de vuelta
+    df_model = df[["Depth", "Well"] + features].copy()
+    df_model["_original_index"] = df_model.index
+    df_model = df_model.dropna(subset=features).reset_index(drop=True)
+    
     return df_model, features
 
 
@@ -198,39 +203,43 @@ def train_model(df_model: pd.DataFrame, features: list):
     model = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
     model.fit(X_scaled, y)
     
-    df_model = df_model.copy()
     df_model["Prediction"] = model.predict(X_scaled)
     
     return df_model, model
 
 
 def integrate_results(df: pd.DataFrame, df_model: pd.DataFrame) -> pd.DataFrame:
-    required_cols = ["Depth", "Well", "Prediction"]
-    missing_cols = [col for col in required_cols if col not in df_model.columns]
+    # Verificar que las columnas necesarias existan
+    if "Prediction" not in df_model.columns:
+        raise ValueError(f"df_model no tiene 'Prediction'. Columnas: {list(df_model.columns)}")
     
-    if missing_cols:
-        raise ValueError(f"df_model no tiene las columnas: {missing_cols}. Columnas disponibles: {list(df_model.columns)}")
+    if "_original_index" not in df_model.columns:
+        raise ValueError(f"df_model no tiene '_original_index'. Columnas: {list(df_model.columns)}")
     
-    df_merged = df.merge(
-        df_model[["Depth", "Well", "Prediction"]], 
-        on=["Depth", "Well"], 
-        how="left"
-    )
+    # Crear un diccionario para mapear predicciones usando el índice original
+    prediction_map = dict(zip(df_model["_original_index"], df_model["Prediction"]))
     
-    if "Prediction" not in df_merged.columns:
-        raise ValueError("Error: La columna 'Prediction' no existe después del merge")
+    # Aplicar las predicciones al DataFrame original usando el índice
+    df = df.copy()
+    df["Prediction"] = df.index.map(prediction_map)
     
-    if df_merged["Prediction"].notna().sum() >= 3:
+    # Verificar que se aplicaron las predicciones
+    if df["Prediction"].isna().all():
+        raise ValueError("No se pudieron mapear las predicciones. Los índices no coinciden.")
+    
+    # Clasificar calidad del reservorio
+    valid_predictions = df["Prediction"].notna().sum()
+    if valid_predictions >= 3:
         try:
-            df_merged["Reservoir_Quality"] = pd.qcut(
-                df_merged["Prediction"], 3, labels=["Low", "Medium", "High"], duplicates="drop"
+            df["Reservoir_Quality"] = pd.qcut(
+                df["Prediction"], 3, labels=["Low", "Medium", "High"], duplicates="drop"
             )
         except Exception:
-            df_merged["Reservoir_Quality"] = "Medium"
+            df["Reservoir_Quality"] = "Medium"
     else:
-        df_merged["Reservoir_Quality"] = "Low"
+        df["Reservoir_Quality"] = "Low"
     
-    return df_merged
+    return df
 
 
 def compare_results(df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
