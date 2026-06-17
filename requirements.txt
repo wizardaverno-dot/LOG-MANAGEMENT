@@ -1,6 +1,6 @@
 streamlit
 lasio
-pandas
 numpy
+pandas
+plotly
 scikit-learn
-matplotlib
